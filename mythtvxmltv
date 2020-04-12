@@ -1,0 +1,156 @@
+#! /bin/bash
+
+#Set user variable
+#Change script to runnable, chmod u+x 
+user=$(whoami)
+configloc=$HOME/.xmltv/
+packagesql="\"sqlite3[[:space:]]*install$\""
+packagexmltv="\"xmltv-util[[:space:]]*install$\""
+
+#Checks which user is running script and gives warning if not mythtv
+function checkID {
+	#Check to make sure it is mythtv
+	if [ $user == mythtv ]
+	then
+		echo Running script as user mythtv
+	#If not running as mythtv give warning that script should be 
+	else
+		echo Running script as $user, it is highly recommended to run this script as user mythtv, do you want to continue \(y/N\)
+		read -n 1 -r
+        	if [[ ! $REPLY =~ ^[Yy]$ ]]
+        	then
+			echo Script exiting.
+			exit 0
+		else
+			echo Continuing script
+		fi
+	fi
+}
+
+#Setup of xmltv, bulk of script run here
+function setupXMLTV {
+	echo This will setup sdjson_sqlite for use with MythTV
+	echo This process will ask you to login to SchedulesDirect
+	echo After you login you need to select 4 to initialize/update local database
+	echo Accept default database name
+	echo Accept the password hash question
+	echo Add or delete linups with option 5
+	#Running this command sets up SQLite database and gets channel linupes
+	tv_grab_zz_sdjson_sqlite --manage-lineups --config-file $configloc/SD.xmltv
+	echo Second command sets up configures local database
+	echo First part will ask for Database Name, just accept default
+	echo Second prompt will ask for Sched Direct lineup
+	echo Third prompt hit enter or 0 to accept MytvTV Cat processing
+	#Configures local database
+	tv_grab_zz_sdjson_sqlite --configure --config-file $configloc/SD.xmltv
+	echo Third command tries to pull data to the database
+	echo Essentially testing our setup
+	echo At the end it will note how many channels were processed
+	echo If this number sounds correct, if not will have to select all channels manually
+	#Pulls data from Schedules Direct and into the database
+	tv_grab_zz_sdjson_sqlite --days 0 --config-file ~/.xmltv/SD.xmltv 2>&1 > /dev/null
+	#Asks user if this is the number of expected channels
+	echo Are the number of channels consistant with what you expected\(Y/n\)
+	read -n 1 -r
+                if [[ $REPLY =~ ^[Yy]$ ]]
+                then
+                        echo Filling local database
+			tv_grab_zz_sdjson_sqlite --download-only --config-file $configloc/SD.xmltv
+                else
+                        echo Launching manage lineups, select option 5 and select all channels manually
+			echo See wiki for more information
+			tv_grab_zz_sdjson_sqlite --manage-lineups --config-file $configloc/SD.xmltv
+			echo Will now try to fill local database
+                     	tv_grab_zz_sdjson_sqlite --download-only --config-file $configloc/SD.xmltv
+                fi
+	echo xmltv has been set up
+	echo Database name is:
+	ls $configloc | grep ".DB"
+	echo Config file is named: 
+	ls $configloc | grep ".xmltv"
+	echo Both files are located: 
+	echo $configloc
+	cp -v $configloc/SD.xmltv $HOME/.mythtv/
+	echo When setting up Video Sources in Mythtv need to name of Source to: SD
+}
+
+function installPackages {
+	#echo $configloc
+	#dpkg --get-selections | grep "sqlite3[[:space:]]*install$" #$packagesql
+	if dpkg --get-selections | grep "sqlite3[[:space:]]*install$" > /dev/null; then
+		echo SQLite3 installed
+	else
+		echo SQLite3 not installed
+		echo "install with command sudo apt-get install sqlite3"
+		#exit 0
+	fi
+	if dpkg --get-selections | grep "xmltv-util[[:space:]]*install$" > /dev/null; then
+		checkpackageversion
+		#echo xmltv-util version $xmltvver installed
+	else
+		checkpackageversion
+		echo xmltv-util not installed
+		echo "install with command sudo apt-get install xmltv-util"
+		#exit 0
+	fi
+	#echo $packagexmltv
+}
+
+#Checks package version of xmltv
+#Noted in version less than 0.5.70-1 sqlite grabber was not present
+function checkpackageversion {
+	xmltvver=$(dpkg-query -W xmltv-util | awk '{print $2}')
+	#If xmltvver is null or empty than xmltv is not present and will ask if pull from source
+	if [[ ! $xmltvver ]]; then
+		xmltvver=0
+	fi
+	echo $xmltvver
+        dpkg --compare-versions 0.5.70-1 gt $xmltvver
+        if [ $? -eq "0" ]; then
+       		echo Need version 0.5.70 or greater for xmltv
+                echo Package package from source? Source URL:  https://github.com/XMLTV/xmltv.git
+		echo Warning: function will use sudo to install\(Y/n\)
+                read -n 1 -r
+                if [[ $REPLY =~ ^[Yy]$ ]]
+                then
+                        buildxmltv
+                else
+                        exit 0
+                fi
+        else
+               echo Package greater than 0.5.70
+        fi
+}
+
+#Build xmltv from source
+#Warning requires SUDO
+function buildxmltv {
+	cd $HOME
+	dir=$HOME/build
+	echo $dir
+	if [[ ! -d  $dir ]]; then
+		mkdir -p build
+	else
+		echo $dir already exists, using existing dir 
+	fi
+	cd build
+	git clone https://github.com/XMLTV/xmltv.git
+	cd xmltv
+	perl Makefile.PL
+	make
+	make test
+	sudo make install
+	cd $dir
+	echo Would you like to delete xmltv directory?\(Y/n\)
+	read -n 1 -r
+	if [[ $REPLY =~ ^[Yy]$ ]]
+	then
+		rm -r --interactive=never xmltv
+		echo $dir/xmltv removed
+	fi
+}
+
+#####################MAIN###############
+checkID
+installPackages
+setupXMLTV
